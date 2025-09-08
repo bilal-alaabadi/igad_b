@@ -24,43 +24,75 @@ router.post("/uploadImages", async (req, res) => {
 });
 
 // نقطة النهاية لإنشاء منتج
+const ALLOWED_CATEGORIES = new Set(["حقائب", "كڤرات", "حماية الشاشة", "إكسسوارات"]);
+
 router.post("/create-product", async (req, res) => {
   try {
-    const { name, category, size, description,  oldPrice, price, image, author } = req.body;
+    let { name, category, description, oldPrice, price, image, author } = req.body;
 
-    // التحقق من الحقول المطلوبة الأساسية
-    if (!name || !category || !description || !price || !image || !author) {
+    // 1) التحقق من الحقول المطلوبة الأساسية
+    if (!name || !category || !description || price == null || !image || !author) {
       return res.status(400).send({ message: "جميع الحقول المطلوبة يجب إرسالها" });
     }
 
-    // إذا كانت الفئة حناء بودر، نتحقق من وجود الحجم
-    if (category === 'حناء بودر' && !size) {
-      return res.status(400).send({ message: "يجب تحديد حجم الحناء" });
+    // 2) التحقق من التصنيف المسموح به
+    if (!ALLOWED_CATEGORIES.has(category)) {
+      return res.status(400).send({ message: "تصنيف غير مسموح. التصنيفات المتاحة: حقائب، كڤرات، حماية الشاشة، إكسسوارات" });
     }
 
-    // إنشاء كائن المنتج
+    // 3) تنظيف وتحويل القيم
+    name = String(name).trim();
+    description = String(description).trim();
+
+    // تحويل السعر إلى رقم والتحقق منه
+    const priceNum = Number(price);
+    if (Number.isNaN(priceNum) || priceNum < 0) {
+      return res.status(400).send({ message: "قيمة السعر غير صالحة" });
+    }
+
+    // oldPrice اختياري: إن أُرسل وكان رقمًا صالحًا نُخزنه، وإلا نتجاهله
+    let oldPriceNum;
+    if (oldPrice !== undefined && oldPrice !== "") {
+      oldPriceNum = Number(oldPrice);
+      if (Number.isNaN(oldPriceNum) || oldPriceNum < 0) {
+        return res.status(400).send({ message: "قيمة السعر القديم غير صالحة" });
+      }
+    }
+
+    // 4) الصور: قبول مصفوفة أو سلسلة واحدة
+    let images = [];
+    if (Array.isArray(image)) {
+      images = image.filter(Boolean);
+    } else if (typeof image === "string" && image.trim() !== "") {
+      images = [image.trim()];
+    }
+
+    if (images.length === 0) {
+      return res.status(400).send({ message: "يجب إرسال صورة واحدة على الأقل" });
+    }
+
+    // 5) إنشاء كائن المنتج (لا يوجد منطق حجم/حناء)
     const productData = {
-      name: category === 'حناء بودر' ? `${name} - ${size}` : name,
+      name,
       category,
       description,
-      price,
-      oldPrice,
-      image,
+      price: priceNum,
+      image: images,
       author,
     };
 
-    // إضافة الحجم فقط لمنتجات الحناء
-    if (category === 'حناء بودر') {
-      productData.size = size;
+    if (oldPriceNum !== undefined) {
+      productData.oldPrice = oldPriceNum;
     }
 
+    // 6) الحفظ
     const newProduct = new Products(productData);
     const savedProduct = await newProduct.save();
 
-    res.status(201).send(savedProduct);
+    return res.status(201).send(savedProduct);
   } catch (error) {
     console.error("Error creating new product", error);
-    res.status(500).send({ message: "Failed to create new product" });
+    return res.status(500).send({ message: "Failed to create new product" });
   }
 });
 
@@ -145,60 +177,122 @@ router.get(["/:id", "/product/:id"], async (req, res) => {
 const multer = require('multer');
 const upload = multer();
 
-router.patch("/update-product/:id", 
-    verifyToken, 
-    verifyAdmin, 
-    upload.single('image'),
-    async (req, res) => {
-        try {
-            const productId = req.params.id;
-            
-            let updateData = {
-                name: req.body.name,
-                category: req.body.category,
-                price: req.body.price,
-                oldPrice: req.body.oldPrice || null,
-                description: req.body.description,
-                size: req.body.size || null,
-                author: req.body.author
-            };
+router.patch(
+  "/update-product/:id",
+  verifyToken,
+  verifyAdmin,
+  upload.array("image", 10), // ⬅️ دعم رفع أكثر من صورة
+  async (req, res) => {
+    try {
+      const productId = req.params.id;
 
-            // التحقق من الحقول المطلوبة للتحديث
-            if (!updateData.name || !updateData.category || !updateData.price || !updateData.description) {
-                return res.status(400).send({ message: "جميع الحقول المطلوبة يجب إرسالها" });
-            }
+      // اجلب المنتج الحالي للاعتماد عليه عند عدم رفع صور جديدة
+      const existing = await Products.findById(productId);
+      if (!existing) {
+        return res.status(404).send({ message: "المنتج غير موجود" });
+      }
 
-            // إذا كانت الفئة حناء بودر، نتحقق من وجود الحجم
-            if (updateData.category === 'حناء بودر' && !updateData.size) {
-                return res.status(400).send({ message: "يجب تحديد حجم الحناء" });
-            }
+      // تجهيز الحقول
+      const name = req.body.name?.trim();
+      const category = req.body.category;
+      const description = req.body.description?.trim();
+      const price = req.body.price;
+      const oldPrice = req.body.oldPrice;
 
-            if (req.file) {
-                updateData.image = req.file.path;
-            }
+      // تحقق أساسي
+      if (!name || !category || !description || price == null) {
+        return res.status(400).send({ message: "جميع الحقول المطلوبة يجب إرسالها" });
+      }
 
-            const updatedProduct = await Products.findByIdAndUpdate(
-                productId,
-                { $set: updateData },
-                { new: true, runValidators: true }
-            );
+      // التحقق من التصنيف
+      if (!ALLOWED_CATEGORIES.has(category)) {
+        return res
+          .status(400)
+          .send({ message: "تصنيف غير مسموح. المتاح: حقائب، كڤرات، حماية الشاشة، إكسسوارات" });
+      }
 
-            if (!updatedProduct) {
-                return res.status(404).send({ message: "المنتج غير موجود" });
-            }
+      // تحويل الأسعار
+      const priceNum = Number(price);
+      if (Number.isNaN(priceNum) || priceNum < 0) {
+        return res.status(400).send({ message: "قيمة السعر غير صالحة" });
+      }
 
-            res.status(200).send({
-                message: "تم تحديث المنتج بنجاح",
-                product: updatedProduct,
-            });
-        } catch (error) {
-            console.error("خطأ في تحديث المنتج", error);
-            res.status(500).send({ 
-                message: "فشل تحديث المنتج",
-                error: error.message
-            });
+      let oldPriceNum;
+      if (oldPrice !== undefined && oldPrice !== "") {
+        oldPriceNum = Number(oldPrice);
+        if (Number.isNaN(oldPriceNum) || oldPriceNum < 0) {
+          return res.status(400).send({ message: "قيمة السعر القديم غير صالحة" });
         }
+      }
+
+      // الصور:
+      // إذا جاءتنا ملفات جديدة -> استبدال الصور بالكامل بالمسارات/الروابط التي تحددها
+      // ملاحظة: req.files هنا بايتات في الذاكرة، عادةً ترفعها لخدمة تخزين ثم تحفظ الروابط.
+      // لأجل المثال سنحفظ "مسارات وهمية" أو "buffer طول" (عدّل بحسب بنية مشروعك).
+      let images = existing.image || [];
+
+      if (req.files && req.files.length > 0) {
+        // TODO: ارفع req.files إلى S3/Cloudinary وأعد قائمة الروابط بدل السطور التالية
+        images = req.files.map((f, idx) => {
+          // مثال placeholder يبين أين تحفظ الرابط الحقيقي للملف بعد رفعه
+          return `/uploads/${productId}/${Date.now()}_${idx}.bin`;
+        });
+      } else if (req.body.image) {
+        // دعم مرور روابط جاهزة عبر body.image (سلسلة واحدة أو JSON Array)
+        if (Array.isArray(req.body.image)) {
+          images = req.body.image.filter(Boolean);
+        } else if (typeof req.body.image === "string") {
+          try {
+            const parsed = JSON.parse(req.body.image);
+            if (Array.isArray(parsed)) images = parsed.filter(Boolean);
+            else if (req.body.image.trim()) images = [req.body.image.trim()];
+          } catch {
+            if (req.body.image.trim()) images = [req.body.image.trim()];
+          }
+        }
+      }
+
+      if (!images || images.length === 0) {
+        return res.status(400).send({ message: "يجب إرفاق صورة واحدة على الأقل أو إبقاء القديمة" });
+      }
+
+      const updateData = {
+        name,
+        category,
+        description,
+        price: priceNum,
+        image: images,
+        author: req.body.author || existing.author, // لا تغيّر المالك لو ما أُرسل
+      };
+
+      if (oldPriceNum !== undefined) {
+        updateData.oldPrice = oldPriceNum;
+      } else {
+        updateData.oldPrice = null; // أو اتركه بدون تغيير: احذف هذا السطر لو تريده يبقى كما هو
+      }
+
+      const updatedProduct = await Products.findByIdAndUpdate(
+        productId,
+        { $set: updateData },
+        { new: true, runValidators: true }
+      );
+
+      if (!updatedProduct) {
+        return res.status(404).send({ message: "المنتج غير موجود" });
+      }
+
+      return res.status(200).send({
+        message: "تم تحديث المنتج بنجاح",
+        product: updatedProduct,
+      });
+    } catch (error) {
+      console.error("خطأ في تحديث المنتج", error);
+      return res.status(500).send({
+        message: "فشل تحديث المنتج",
+        error: error.message,
+      });
     }
+  }
 );
 
 // delete a product
