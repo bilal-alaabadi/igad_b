@@ -12,7 +12,7 @@ const THAWANI_API_URL = process.env.THAWANI_API_URL;
 const publish_key = "HGvTMLDssJghr9tlN9gr4DVYt0qyBy";
 
 const app = express();
-app.use(cors({ origin: "http://localhost:5173" }));
+app.use(cors({ origin: "https://www.igadom.com" }));
 app.use(express.json());
 
 // Create checkout session
@@ -49,8 +49,8 @@ router.post("/create-checkout-session", async (req, res) => {
       client_reference_id: nowId,
       mode: "payment",
       products: lineItems,
-      success_url: "http://localhost:5173/SuccessRedirect?client_reference_id=" + nowId,
-      cancel_url: "http://localhost:5173/cancel",
+      success_url: "https://www.igadom.com/SuccessRedirect?client_reference_id=" + nowId,
+      cancel_url: "https://www.igadom.com/cancel",
       metadata: {
         customer_name: customerName,
         customer_phone: customerPhone,
